@@ -1,12 +1,33 @@
 import logging
 import os
 import time
+from http import HTTPStatus
+from logging.handlers import RotatingFileHandler
 
 import requests
 import telegram
 from dotenv import load_dotenv
 
+from exceptions import EmptyApiResponseError, MissingTokenError
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = RotatingFileHandler(
+    'logger_hw.log',
+    maxBytes=5000000,
+    backupCount=5,
+    encoding='utf-8'
+)
+formatter = logging.Formatter(
+    '%(asctime)s,'
+    '%(levelname)s,'
+    '%(message)s,'
+    '%(name)s'
+)
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -26,19 +47,27 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Проверка наличия переменных окружения."""
-    if not all([PRACTICUM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_TOKEN]):
-        logging.critical('No Token!')
-        raise ValueError('Нет одного из необходимых токенов')
+    tokens_dict = {
+        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
+        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
+        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID
+    }
+    for token in tokens_dict:
+        if not tokens_dict[token]:
+            logger.critical(f'Отсутствует обязательная'
+                            f'переменная окружения: {token}')
+            return False
+    return True
 
 
 def send_message(bot, message):
     """Отправка сообщение ботом."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logging.debug(f'Бот успешно отравил сообщение: {message}')
+        logger.debug(f'Бот успешно отравил сообщение: {message}')
     except Exception as error:
-        logging.error(f'Бот не смог отправить сообщение.'
-                      f'Текст ошибки: {error}')
+        logger.error(f'Бот не смог отправить сообщение.'
+                     f'Текст ошибки: {error}')
 
 
 def get_api_answer(timestamp):
@@ -50,41 +79,46 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=PAYLOAD
         )
-        if response.status_code != 200:
-            logging.error('API сервис недоступен')
-            raise Exception('Сервис API недоступен')
+        if response.status_code != HTTPStatus.OK:
+            logger.error('API сервис недоступен')
+            raise EmptyApiResponseError('Сервис API недоступен')
     except requests.RequestException:
-        logging.error(f'Эндпоинт недоступен.'
-                      f'Ответ Api: {response.status_code}')
-    return response.json()
+        logger.error(f'Эндпоинт недоступен.'
+                     f'Ответ Api: {response.status_code}')
+    try:
+        response_json = response.json()
+    except Exception:
+        logger.error('Не удалось конвертировать json в формат python')
+    return response_json
 
 
 def check_response(response):
     """Проверка ответа API."""
     if not isinstance(response, dict):
-        logging.error('Неверный тип данных response')
-        raise TypeError('Неверный тип данных response')
+        raise TypeError('Response пришел не в формате dict')
+    if 'current_date' not in response:
+        raise KeyError('Отсутствует ключ домашки "current_date"')
     if 'homeworks' not in response:
-        logging.error('Отсутствует ключ "homeworks"')
-        raise KeyError('Отсутствует ключ "homeworks"')
+        raise KeyError('Отсутствует ключ домашки "homeworks"')
     homeworks = response['homeworks']
     if not isinstance(homeworks, list):
-        logging.error('Неверный тип данных списка "homeworks"')
-        raise TypeError('Неверный тип данных списка "homeworks"')
+        raise TypeError('Данные ДЗ пришли не в виде списка')
     if not homeworks:
-        logging.debug('Список домашнего задания пуст')
+        logger.debug('Список домашнего задания пуст')
     return homeworks
 
 
 def parse_status(homework):
     """Извлечение данных конкретного ДЗ."""
-    try:
-        homework_name = homework['homework_name']
-    except KeyError:
-        logging.error('У ДЗ отсутствует ключ "homeworks_name"')
+    if not isinstance(homework, dict):
+        raise TypeError('Неверный тип данных homework')
+    if 'homework_name' not in homework:
+        raise KeyError('У ДЗ отсутствует ключ "homeworks_name"')
+    homework_name = homework['homework_name']
+    if 'status' not in homework:
+        raise KeyError('У ДЗ отсутствует ключ "status"')
     if homework['status'] not in HOMEWORK_VERDICTS:
-        logging.debug('Недокументированный статус ДЗ')
-        raise KeyError('Незадокументированный статус ДЗ')
+        raise KeyError('Недокументированный статус ДЗ')
     verdict = homework['status']
     return (f'Изменился статус проверки работы "{homework_name}".'
             f'{HOMEWORK_VERDICTS[verdict]}')
@@ -92,7 +126,10 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if not check_tokens():
+        logger.critical('Отсутствует обязательная переменная окружения.')
+        raise MissingTokenError('Программа принудительно остановлена:'
+                                ' отсутствует необходимый токен')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     prev_message = ''
@@ -107,25 +144,15 @@ def main():
                 new_message = parse_status(last_homework)
             if new_message != prev_message:
                 send_message(bot, new_message)
-                logging.debug(f'Бот успешно отправил сообщение: {new_message}')
                 prev_message = new_message
+        except KeyboardInterrupt:
+            logger.debug('Программа остановлена принудительно')
         except Exception as error:
             text_error = f'Сбой в работе программы: {error}'
-            logging.error(f'Отправка сообщения не удалась: {text_error}')
+            logger.error(f'Отправка сообщения не удалась: {text_error}')
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.DEBUG,
-        filename='main.log',
-        filemode='w',
-        format=(
-            '%(asctime)s,'
-            '%(levelname)s,'
-            '%(message)s,'
-            '%(name)s'
-        )
-    )
     main()
