@@ -8,7 +8,8 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
-from exceptions import EmptyApiResponseError, MissingTokenError
+from exceptions import (ConvertJsonError, EmptyApiResponseError,
+                        MissingTokenError)
 
 load_dotenv()
 
@@ -88,7 +89,8 @@ def get_api_answer(timestamp):
     try:
         response_json = response.json()
     except Exception:
-        logger.error('Не удалось конвертировать json в формат python')
+        raise ConvertJsonError('Не удалось конвертировать'
+                               ' json в формат python')
     return response_json
 
 
@@ -151,6 +153,7 @@ def main():
             text_error = f'Сбой в работе программы: {error}'
             logger.error(f'Отправка сообщения не удалась: {text_error}')
         finally:
+            timestamp = timestamp
             time.sleep(RETRY_PERIOD)
 
 

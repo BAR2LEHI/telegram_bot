@@ -4,3 +4,7 @@ class EmptyApiResponseError(Exception):
 
 class MissingTokenError(Exception):
     pass
+
+
+class ConvertJsonError(Exception):
+    pass
