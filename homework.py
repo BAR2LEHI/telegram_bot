@@ -146,7 +146,7 @@ def main():
                 new_message = parse_status(last_homework)
             if new_message != prev_message:
                 send_message(bot, new_message)
-                prev_message = new_message 
+                prev_message = new_message
         except Exception as error:
             text_error = f'Сбой в работе программы: {error}'
             logger.error(f'Отправка сообщения не удалась: {text_error}')
